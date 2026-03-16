@@ -1,1 +1,2 @@
-code/checkpoints/*
+*.pth
+*.pt
