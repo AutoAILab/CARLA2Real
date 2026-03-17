@@ -17,9 +17,15 @@ To run the pipeline:
    ```
 
 ### Arguments
-- `--input`: Root directory of the synthetic dataset (e.g., `proof_of_concept`).
+- `--input`: Root directory of the synthetic dataset (e.g., `simulated`).
 - `--output`: Root directory where the realistic dataset will be saved.
 - `--config`: (Optional) Path to a custom `carla_config.yaml`. Defaults to `code/config/carla_config.yaml`.
+- `--overwrite`: (Optional) Flag to overwrite and clear out existing images in the output directory. If omitted, existing images will be skipped.
+
+### Example
+```bash
+uv run pipeline/run_pipeline.py --input /home/df/data/datasets/SkyScenes/simulated --output /home/df/data/datasets/SkyScenes/realistic --overwrite
+```
 
 ## Data Preparation
 The script expects the input directory to contain nested folders with the following structure:

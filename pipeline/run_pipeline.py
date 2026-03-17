@@ -1,7 +1,7 @@
 import os
 import argparse
 import numpy as np
-import imageio
+import imageio.v2 as imageio
 import cv2
 from pathlib import Path
 import yaml
@@ -97,7 +97,7 @@ def preprocess_gbuffer(gbuf_path, img_path):
     stacked_image = np.concatenate(processed_list, axis=2)
     return stacked_image
 
-def run_regen_inference(town_dir, target_images_dir, regen_cfg, checkpoint_path, device):
+def run_regen_inference(town_dir, target_images_dir, regen_cfg, checkpoint_path, device, image_dir=None, overwrite=False):
     from epe.REGEN import regen_generator
     
     # Initialize Generator
@@ -117,13 +117,18 @@ def run_regen_inference(town_dir, target_images_dir, regen_cfg, checkpoint_path,
     generator.load_state_dict(checkpoint)
     generator.eval()
 
-    image_dir = town_dir / "Images"
+    if image_dir is None:
+        image_dir = town_dir / "Images"
     image_files = sorted(list(image_dir.glob("*.png")))
     
     target_images_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.no_grad():
         for img_path in tqdm(image_files, desc=f"REGEN Inference {town_dir.name}"):
+            out_img_path = target_images_dir / img_path.name
+            if out_img_path.exists() and not overwrite:
+                continue
+
             img = imageio.imread(img_path)
             if img.shape[2] == 4:
                 img = img[:, :, :3]
@@ -139,19 +144,24 @@ def run_regen_inference(town_dir, target_images_dir, regen_cfg, checkpoint_path,
             out_img = ((out_img + 1) * 127.5).clip(0, 255).astype(np.uint8)
             
             # Save
-            imageio.imwrite(target_images_dir / img_path.name, out_img)
+            imageio.imwrite(out_img_path, out_img)
 
 def main():
     parser = argparse.ArgumentParser(description="CARLA2Real Pipeline Orchestrator (EPE & REGEN)")
-    parser.add_argument('--input', type=str, required=True, help='Input directory (e.g. proof_of_concept)')
+    parser.add_argument('--input', type=str, nargs='+', required=True, help='Input directory or directories (e.g. simulated)')
     parser.add_argument('--output', type=str, required=True, help='Output directory (e.g. realistic)')
     parser.add_argument('--config', type=str, default='code/config/carla_config.yaml', help='Base carla_config.yaml')
+    parser.add_argument('--overwrite', action='store_true', help='Overwrite existing processed images (default: skip)')
     args = parser.parse_args()
 
-    input_root = Path(args.input).resolve()
+    input_roots = [Path(inp).resolve() for inp in args.input]
     output_root = Path(args.output).resolve()
     
     config_path = PROJECT_ROOT / args.config
+    if not config_path.exists():
+        # Try relative to PIPELINE_DIR if not found relative to PROJECT_ROOT
+        config_path = PIPELINE_DIR / args.config
+    
     with open(config_path, 'r') as f:
         carla_config = yaml.safe_load(f)
 
@@ -159,10 +169,17 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using method: {method} on {device}")
 
-    town_dirs = []
-    for root, dirs, files in os.walk(input_root):
-        if 'Images' in dirs and 'GBuffer' in dirs and 'CarlaSegment' in dirs:
-            town_dirs.append(Path(root))
+    town_dirs = [] # list of (root, town_path) tuples
+    for input_root in input_roots:
+        if not input_root.exists():
+            print(f"Warning: Input root {input_root} does not exist. Skipping.")
+            continue
+            
+        for root, dirs, files in os.walk(input_root):
+            # Case-insensitive check for required directories
+            dir_names = [d.lower() for d in dirs]
+            if 'images' in dir_names and 'gbuffer' in dir_names and 'carlasegment' in dir_names:
+                town_dirs.append((input_root, Path(root)))
 
     if not town_dirs:
         print("No valid sensor directories found (needs Images, GBuffer, CarlaSegment).")
@@ -170,14 +187,27 @@ def main():
 
     print(f"Found {len(town_dirs)} condition directories to process.")
 
-    for town_dir in town_dirs:
+    for input_root, town_dir in town_dirs:
         rel_path = town_dir.relative_to(input_root)
-        print(f"\n>>> Processing {rel_path}...")
+        print(f"\n>>> Processing {rel_path} from {input_root.name}...")
         
         target_town_dir = output_root / rel_path
         target_images_dir = target_town_dir / "Images"
+        
+        if args.overwrite and target_images_dir.exists():
+            print(f"Clearing old images in {target_images_dir.name} due to --overwrite...")
+            for f in target_images_dir.glob("*.png"):
+                f.unlink()
+                
         target_images_dir.mkdir(parents=True, exist_ok=True)
         
+        # Helper to find case-insensitive subdirectory
+        def get_subdir(parent, name):
+            for d in parent.iterdir():
+                if d.is_dir() and d.name.lower() == name.lower():
+                    return d
+            return parent / name # Fallback
+
         if method == "REGEN":
             checkpoint_name = carla_config['REGEN_settings']['checkpoint_name']
             checkpoint_path = CODE_ROOT / "checkpoints" / "REGEN" / checkpoint_name
@@ -186,7 +216,9 @@ def main():
                 print("Please download it and place it in the correct directory.")
                 continue
             
-            run_regen_inference(town_dir, target_images_dir, carla_config['REGEN_settings'], checkpoint_path, device)
+            # Find Images dir case-insensitively
+            image_dir = get_subdir(town_dir, "Images")
+            run_regen_inference(town_dir, target_images_dir, carla_config['REGEN_settings'], checkpoint_path, device, image_dir=image_dir, overwrite=args.overwrite)
             
         elif method == "EPE":
             # EPE logic requires test.txt manifest
@@ -197,14 +229,18 @@ def main():
             gbuf_tmp.mkdir(exist_ok=True)
             seg_tmp.mkdir(exist_ok=True)
             
-            image_dir = town_dir / "Images"
-            gbuffer_dir = town_dir / "GBuffer"
-            segment_dir = town_dir / "CarlaSegment"
+            image_dir = get_subdir(town_dir, "Images")
+            gbuffer_dir = get_subdir(town_dir, "GBuffer")
+            segment_dir = get_subdir(town_dir, "CarlaSegment")
             
             image_files = sorted(list(image_dir.glob("*.png")))
             manifest_entries = []
             
             for img_path in tqdm(image_files, desc=f"Preprocessing EPE {rel_path.name}"):
+                out_img_path = target_images_dir / img_path.name
+                if out_img_path.exists() and not args.overwrite:
+                    continue
+
                 frame_id = img_path.stem
                 gbuf_in = gbuffer_dir / f"{frame_id}_gbuffer.npz"
                 gbuf_out = gbuf_tmp / f"{frame_id}.npz"
@@ -220,6 +256,10 @@ def main():
                 
                 manifest_entries.append(f"{img_path.absolute()},{img_path.absolute()},{gbuf_out.absolute()},{seg_out.absolute()}")
                 
+            if not manifest_entries:
+                print(f"No new EPE images to process for {rel_path}")
+                continue
+
             manifest_path = tmp_dir / "test.txt"
             with open(manifest_path, "w") as f:
                 f.write("\n".join(manifest_entries))

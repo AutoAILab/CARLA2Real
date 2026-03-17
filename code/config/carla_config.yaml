@@ -92,7 +92,7 @@ onnx_runtime_settings:
   enable_fp16: True #this is used when execution_provider is set to TensorrtExecutionProvider. Keep it enabled for fast inference speed.
 
 REGEN_settings: #change these settings only if you trained custom REGEN models with different parameters
-  checkpoint_name: "carla2nuScenes.pth" #change with the checkpoint name (not the entire path)
+  checkpoint_name: "carla2cs.pth" #change with the checkpoint name (not the entire path)
   input_nc: 3
   output_nc: 3
   ngf: 64

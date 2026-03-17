@@ -1,2 +1,11 @@
+# data
 *.pth
 *.pt
+*.npz
+
+# agent/vscode
+__pycache__
+.agent
+.complete/
+.tickets/
+.venv/
