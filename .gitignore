@@ -8,4 +8,4 @@ __pycache__
 .agent
 .complete/
 .tickets/
-.venv/
+.venv/code/checkpoints/REGEN/carla2nuScenes.pth
